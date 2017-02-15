@@ -1,42 +1,65 @@
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, InlineQueryHandler, ConversationHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, InlineQueryHandler, ConversationHandler, Job
 from telegram import InlineQueryResultArticle, ChatAction, InputTextMessageContent, InlineKeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardHide
 from uuid import uuid4
 import subprocess
 import time
 import logging
+# password qwerty
+import crypt
 
-EXECUTE = 1
+PASSWORDHASH = '$6$i1GrpmnGDHgRljE.$JH84qrxZZAgWMqhtjXNQlczDRIU/kiIq98204qjt0Z5i85j0LKx.V/ApzPpgw8MijyPXWrOAXhc1vFlbdDLoO.'
+
+STOPSERVICE      = "Stop service"
+STARTSERVICE     = "Start service"
+SHOWSTATUS       = "Show status"
+ADMINMODEDISABLE = "Disable admin mode"
 
 message_id = 0
 
-def start(bot, update):
+EXECUTE = 1
+
+def alarm(bot, job):
+    """Function to send the alarm message"""
+    bot.sendMessage(job.context, text='Test job schedule')
+
+def start(bot, update, chat_data, job_queue):
+    command = update.message.text
+
+    checkPasswordList = command.split()
+
+    if (len(checkPasswordList) < 2):
+        bot.sendMessage(chat_id=update.message.chat_id, text="second argument is password")
+        return ConversationHandler.END
+
+
+    if crypt.crypt(checkPasswordList[1], PASSWORDHASH) != PASSWORDHASH:
+        bot.sendMessage(chat_id=update.message.chat_id, text="Wrong password")
+        return ConversationHandler.END
+
     bot.sendChatAction(chat_id=update.message.chat_id,
                        action=ChatAction.TYPING)
     bot.sendMessage(chat_id=update.message.chat_id, text="Admin mode enable")
 
-    keyboard = [[InlineKeyboardButton("Show filter options", callback_data='/option'),
-                 InlineKeyboardButton("Show filter status", callback_data='/stat')],
+    update.message.reply_text("Set Job")
+    job = Job(alarm, 5, context=update.message.chat_id)
+    chat_data['job'] = job
+    job_queue.put(job)
 
-                [InlineKeyboardButton("Restart filter", callback_data='/restart')],
+    keyboard = [[InlineKeyboardButton(STARTSERVICE),
+                 InlineKeyboardButton(STOPSERVICE)],
 
-                [InlineKeyboardButton("Disable admin mode", callback_data='/stop')]]
+                [InlineKeyboardButton(SHOWSTATUS)],
+
+                [InlineKeyboardButton(ADMINMODEDISABLE)]]
 
     reply_markup = ReplyKeyboardMarkup(keyboard)
-
-    print "update.message.message_id: ", update.message.message_id
-
-    message = update.message.reply_text('Please choose:', reply_markup=reply_markup)
-
-    message_id = message.message_id
-
-    print message_id, '\n'
 
     return EXECUTE
 
 def changeMarkup(bot, update):
     update.message.reply_text("", reply_markup=ReplyKeyboardHide());
 
-def execute(bot, update, direct=True):
+def execute(bot, update, chat_data):
     try:
         user_id = update.message.from_user.id
         command = update.message.text
@@ -47,14 +70,22 @@ def execute(bot, update, direct=True):
         command = update.inline_query.query
         inline = True
 
-    if command == "Disable admin mode":
+    if command == ADMINMODEDISABLE:
         update.message.reply_text("Admin mode disable", reply_markup=ReplyKeyboardHide())
+        job = chat_data['job']
+        job.schedule_removal()
+        del chat_data['job']
+        update.message.reply_text("Job is die")
         return cancel(bot, update)
-
-    if command == "Change Screen":
-        changeMarkup(bot, update)
+    elif command == STOPSERVICE:
+        pass
+    elif command == STARTSERVICE:
+        pass
+    elif command == SHOWSTATUS:
+        pass
+    else:
         return EXECUTE
-    #if user_id == int(config['ADMIN']['id']):
+
     if not inline:
         bot.sendChatAction(chat_id=update.message.chat_id,
                            action=ChatAction.TYPING)
@@ -91,7 +122,7 @@ def stat(bot, update):
 
 def inlinequery(bot, update):
     query = update.inline_query.query
-    o = execute(query, update, direct=False)
+    o = execute(query, update)
     results = list()
 
     results.append(InlineQueryResultArticle(id=uuid4(),
@@ -110,15 +141,15 @@ def cancel(bot, update):
     print "cancel"
     return ConversationHandler.END
 
-def option(bot, update):
+def startService(bot, update):
     print "option"
     return ConversationHandler.EXECUTE
 
-def stat(bot, update):
+def stopService(bot, update):
     print "stat"
     return ConversationHandler.EXECUTE
 
-def restart(bot, update):
+def showStatus(bot, update):
     print "restart"
     return ConversationHandler.EXECUTE
 
@@ -130,13 +161,16 @@ def main():
     logger = logging.getLogger(__name__)
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[CommandHandler('start', start,
+                                     pass_chat_data=True,
+                                     pass_job_queue=True)],
 
         states={
-            EXECUTE: [CommandHandler('option', option),
-                      CommandHandler('stat', stat),
-                      CommandHandler('restart', restart),
-                      MessageHandler(Filters.text, execute)],
+            EXECUTE: [CommandHandler('start', start),
+                      CommandHandler('startService', startService),
+                      CommandHandler('stopService', stopService),
+                      CommandHandler('status', showStatus),
+                      MessageHandler(Filters.text, execute, pass_chat_data=True)],
         },
 
         fallbacks=[CommandHandler('stop', cancel)]
